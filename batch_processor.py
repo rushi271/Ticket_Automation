@@ -10,6 +10,7 @@ from batch_queue import (
     PROCESSING_DIR,
     PROCESSED_DIR,
     FAILED_DIR,
+    ERROR_SCREENSHOTS_DIR,
 )
 
 load_dotenv()
@@ -71,7 +72,7 @@ def open_first_ticket(page):
     return ticket_page
     
 
-
+# (page1.get_by_text("Device Fota Status Informationexpand_more")).to_be_visible()
 def remove_stage_2_restriction(ticket_page) -> None:
     try:
         opener = ticket_page.get_by_role("button").nth(5)
@@ -104,27 +105,14 @@ def remove_stage_2_restriction(ticket_page) -> None:
         print(f"Stage 2 restriction flow not available / failed ({e}); proceeding with stages.")
 
 
-def complete_stages(ticket_page) -> None:
-    try:
-        stages = [
-            "Mark Stage 1 as Complete",
-            "Mark Stage 2 as Complete",
-            "Mark Stage 3 as Complete",
-            "Mark Stage 4 as Complete"
-        ]
-        
-        for stage_name in stages:
-            button = ticket_page.get_by_role("button", name=stage_name)
-            
-            # Check if button exists and is visible
-            if button.count() > 0 and button.first.is_visible():
-                button.click()
-                print(f"Completed: {stage_name}")
-            else:
-                print(f"Stage already completed or unavailable: {stage_name}")
+
+
+def complete_stages(ticket_page) -> None: 
     
-    except Exception as e:
-        print(f"Stage completion flow failed ({e}); attempting to continue")
+    ticket_page.get_by_role("button", name="Mark Stage 1 as Complete").click() 
+    ticket_page.get_by_role("button", name="Mark Stage 2 as Complete").click() 
+    ticket_page.get_by_role("button", name="Mark Stage 3 as Complete").click() 
+    ticket_page.get_by_role("button", name="Mark Stage 4 as Complete").click()
 
 
 def select_certificate_validity(ticket_page, value: str = "2 Year") -> None:
@@ -176,7 +164,17 @@ def process_one_ticket(page, job: dict) -> None:
 
     try:
         # ticket_page.pause()  # Debug
-        remove_stage_2_restriction(ticket_page)
+        # Only attempt Stage 2 restriction removal when the FOTA section exists
+        if ticket_page.get_by_text("Device Fota Status Informationexpand_more").count() > 0:
+            # Ensure it is visible or at least present
+            fota_el = ticket_page.get_by_text("Device Fota Status Informationexpand_more").first
+            if fota_el.is_visible():
+                remove_stage_2_restriction(ticket_page)
+            else:
+                print("FOTA section found but not visible; skipping stage 2 restriction removal.")
+        else:
+            print("FOTA section not found; skipping stage 2 restriction removal.")
+
         complete_stages(ticket_page)
         select_certificate_validity(ticket_page, "2 Year")
         upload_certificates(ticket_page, vltd_file, backend_file)
@@ -198,6 +196,8 @@ def run(playwright: Playwright) -> None:
         print("No complete jobs available in incoming.")
         return
 
+    ERROR_SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
     print(f"Reserved {len(jobs)} job(s). Starting one browser session for batch processing.")
 
     browser = playwright.chromium.launch(headless=False)
@@ -215,7 +215,7 @@ def run(playwright: Playwright) -> None:
                 print(f"SUCCESS: {job['chassis_no']}")
             except Exception as e:
                 print(f"FAILED: {job['chassis_no']} -> {e}")
-                page.screenshot(path=f"error_{job['chassis_no']}_main.png")
+                page.screenshot(path=str(ERROR_SCREENSHOTS_DIR / f"error_{job['chassis_no']}_main.png"))
                 move_processing_job(job, FAILED_DIR)
 
     finally:
