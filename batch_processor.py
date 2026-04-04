@@ -97,7 +97,7 @@ def remove_stage_2_restriction(ticket_page) -> None:
             print("Stage 2 restriction opener not found, skipping stage 2 restriction.")
             return
 
-        ticket_page.get_by_role("combobox", name="Reason to Skip Stage 2").locator("svg").click(timeout=5000)
+        ticket_page.get_by_role("combobox", name="Reason to Skip Stage 2").locator("svg").click(timeout=3000)
         ticket_page.get_by_text("The device already has the").click()
         ticket_page.get_by_role("button", name="Remove Stage 2 Restriction").click()
 
