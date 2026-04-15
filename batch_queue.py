@@ -1,8 +1,9 @@
 import re
 import shutil
 from pathlib import Path
+from naming_config import extract_components
 
-BASE_DIR = Path(r"C:\Users\Rushi Mantri\Downloads\AIS Certificates\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Backend and VLTD Certificates")
+BASE_DIR = Path(r"C:\Users\Rushi Mantri\Downloads\AIS Certificates\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Documents\Backend and VLTD Certificates")
 
 INCOMING_DIR = BASE_DIR / "incoming"
 PROCESSING_DIR = BASE_DIR / "processing"
@@ -11,46 +12,6 @@ FAILED_DIR = BASE_DIR / "failed"
 ERROR_SCREENSHOTS_DIR = BASE_DIR / "error_screenshots"
 
 CHASSIS_RE = re.compile(r"MAT[A-Z0-9]{14}", re.IGNORECASE)
-
-
-def extract_chassis(file_path: Path) -> str:
-    match = CHASSIS_RE.search(file_path.name)
-    if not match:
-        raise ValueError(f"Could not extract chassis from filename: {file_path.name}")
-    return match.group(0).upper()
-
-
-def extract_state_and_backend(file_path: Path) -> tuple[str, str]:
-    """
-    Extract state and backend type from filename.
-    Format: state_CHASSISNUMBER_backendtype.pdf
-    Example: rj_MAT789092S5E11654_nic.pdf
-    """
-    name = file_path.stem  # Remove .pdf extension
-    parts = name.split('_')
-    
-    if len(parts) < 3:
-        raise ValueError(f"Invalid filename format (expected state_chassis_backend): {file_path.name}")
-    
-    state = parts[0].lower()
-    backend_type = parts[-1].lower()
-    
-    return state, backend_type
-
-
-def detect_cert_type(file_path: Path) -> str:
-    """
-    Detect certificate type from filename.
-    Returns 'vltd' for VLTD certificates, or the backend type (nic, bsnl, backend, etc.)
-    """
-    name = file_path.name.upper()
-
-    if "VLTD" in name:
-        return "vltd"
-    
-    # Extract backend type from the end of filename
-    state, backend_type = extract_state_and_backend(file_path)
-    return backend_type
 
 
 def scan_jobs(folder: Path):
@@ -64,20 +25,24 @@ def scan_jobs(folder: Path):
             continue
 
         try:
-            chassis = extract_chassis(file_path)
-            cert_type = detect_cert_type(file_path)
-            state, backend_type = extract_state_and_backend(file_path)
+            components = extract_components(file_path)
+            chassis = components["chassis"]
+            cert_type = components["cert_type"]
+            state = components.get("state", "")
         except Exception as e:
             print(f"Skipping {file_path.name}: {e}")
             continue
 
-        # Create a composite key: state_chassis
-        key = f"{state}_{chassis}"
+        # Group only by chassis so mixed formats can pair
+        key = chassis
 
         if key not in grouped:
             grouped[key] = {"state": state, "chassis": chassis}
+        else:
+            # If state is missing in existing entry but available now, keep it
+            if not grouped[key].get("state") and state:
+                grouped[key]["state"] = state
 
-        # Store files by their backend type (nic, bsnl, backend, vltd, etc.)
         grouped[key][cert_type] = file_path
 
     jobs = []

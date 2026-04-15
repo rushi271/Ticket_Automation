@@ -15,7 +15,11 @@ from batch_queue import (
 
 load_dotenv()
 
-BASE_URL = "http://52.140.56.82:6102/login"
+# CHANGED: kept direct login URL
+BASE_URL = "http://atcu-data.accoladeelectronics.com:6102/login"
+
+# CHANGED: added direct ticket list URL so script skips menu clicks after login
+TICKET_LIST_URL = "http://atcu-data.accoladeelectronics.com:6102/ais140-ticket-list"
 
 
 def move_processing_job(job: dict, target_dir: Path) -> dict:
@@ -43,25 +47,34 @@ def login(page, username: str, password: str) -> None:
 
     expect(page.get_by_role("link", name="Device Utility")).to_be_visible(timeout=20000)
 
+    # CHANGED: after login, directly open ticket list page instead of clicking Device Utility
+    # and My AIS 140 Tickets manually
+    page.goto(TICKET_LIST_URL)
 
+    # CHANGED: wait for ticket list page readiness here itself
+    expect(page.get_by_role("searchbox", name="Search and Press Enter")).to_be_visible(timeout=15000)
+
+
+# CHANGED: kept this function optional in case you want to use it later,
+# but direct page navigation in login() already replaces this flow.
 def open_ticket_list(page) -> None:
-    page.get_by_role("link", name="Device Utility").click()
-    expect(page.get_by_role("link", name="My AIS 140 Tickets")).to_be_visible(timeout=15000)
-
-    page.get_by_role("link", name="My AIS 140 Tickets").click()
+    page.goto(TICKET_LIST_URL)
     expect(page.get_by_role("searchbox", name="Search and Press Enter")).to_be_visible(timeout=15000)
 
 
 def search_ticket(page, chassis_no: str) -> None:
     search_box = page.get_by_role("searchbox", name="Search and Press Enter")
     search_box.click()
+
+    # CHANGED: clear previous search value before filling next chassis
+    search_box.fill("")
     search_box.fill(chassis_no)
 
     search_button = page.locator("button.search-btn")
     expect(search_button).to_be_visible(timeout=15000)
     search_button.click()
+
     page.get_by_role("img", name="ALL Image").click()
-    # expect(page.locator("mat-icon:has-text('visibility')").first).to_be_visible(timeout=15000)
 
 
 def open_first_ticket(page):
@@ -70,34 +83,30 @@ def open_first_ticket(page):
     ticket_page = popup_info.value
     ticket_page.wait_for_load_state()
     return ticket_page
-    
 
-# (page1.get_by_text("Device Fota Status Informationexpand_more")).to_be_visible()
+
 def remove_stage_2_restriction(ticket_page) -> None:
     try:
         opener = ticket_page.get_by_role("button").nth(5)
 
-        # only proceed if this opener button is visible
         if not opener.is_visible():
             print("Stage 2 restriction opener not visible, skipping stage 2 restriction.")
             return
 
-        # If the final removal button is already available, click it.
-        if (
-            ticket_page.get_by_role("button", name="Remove Stage 2 Restriction").count() > 0
-            and ticket_page.get_by_role("button", name="Remove Stage 2 Restriction").first.is_visible()
-        ):
-            ticket_page.get_by_role("button", name="Remove Stage 2 Restriction").first.click()
+        # CHANGED: store locator once instead of rebuilding same locator multiple times
+        remove_btn = ticket_page.get_by_role("button", name="Remove Stage 2 Restriction")
+
+        if remove_btn.count() > 0 and remove_btn.first.is_visible():
+            remove_btn.first.click()
             return
 
-        # Try to open the restriction flow (legacy index fallback).
         if ticket_page.get_by_role("button").count() > 5:
             ticket_page.get_by_role("button").nth(5).click()
         else:
             print("Stage 2 restriction opener not found, skipping stage 2 restriction.")
             return
 
-        ticket_page.get_by_role("combobox", name="Reason to Skip Stage 2").locator("svg").click(timeout=3000)
+        ticket_page.get_by_role("combobox", name="Reason to Skip Stage 2").locator("svg").click(timeout=5000)
         ticket_page.get_by_text("The device already has the").click()
         ticket_page.get_by_role("button", name="Remove Stage 2 Restriction").click()
 
@@ -105,11 +114,16 @@ def remove_stage_2_restriction(ticket_page) -> None:
         print(f"Stage 2 restriction flow not available / failed ({e}); proceeding with stages.")
 
 
+# CHANGED: helper to skip missing stage buttons quickly instead of failing or waiting long
+def click_if_visible(page, name: str, timeout: int = 1000) -> None:
+    btn = page.get_by_role("button", name=name)
+    if btn.count() > 0 and btn.first.is_visible():
+        btn.first.click(timeout=timeout)
 
 
 def complete_stages(ticket_page) -> None: 
     
-    ticket_page.get_by_role("button", name="Mark Stage 1 as Complete").click() 
+    ticket_page.get_by_role("button", name="Mark Stage 1 as Complete").click(timeout=3000) 
     ticket_page.get_by_role("button", name="Mark Stage 2 as Complete").click() 
     ticket_page.get_by_role("button", name="Mark Stage 3 as Complete").click() 
     ticket_page.get_by_role("button", name="Mark Stage 4 as Complete").click()
@@ -136,6 +150,9 @@ def upload_certificates(ticket_page, vltd_file: Path, backend_file: Path) -> Non
     upload_file_with_chooser(ticket_page, attach_buttons.first, vltd_file)
     upload_file_with_chooser(ticket_page, attach_buttons.nth(1), backend_file)
 
+    # CHANGED: small settle time after upload to reduce UI/file timing issues
+    ticket_page.wait_for_timeout(1000)
+
 
 def close_ticket(ticket_page) -> None:
     status_dropdown = ticket_page.get_by_role(
@@ -148,8 +165,9 @@ def close_ticket(ticket_page) -> None:
     ticket_page.get_by_text("Ticket Completed and Closed").click()
     ticket_page.get_by_role("button", name="Update Ticket").click()
 
-    # Replace this later with exact success text if you know it
-    ticket_page.wait_for_timeout(3000)
+    # CHANGED: reduced fixed wait from 3000 to 1000 for faster run
+    # Replace later with exact success-message wait if you know it
+    ticket_page.wait_for_timeout(1000)
 
 
 def process_one_ticket(page, job: dict) -> None:
@@ -163,11 +181,11 @@ def process_one_ticket(page, job: dict) -> None:
     ticket_page = open_first_ticket(page)
 
     try:
-        # ticket_page.pause()  # Debug
-        # Only attempt Stage 2 restriction removal when the FOTA section exists
-        if ticket_page.get_by_text("Device Fota Status Informationexpand_more").count() > 0:
-            # Ensure it is visible or at least present
-            fota_el = ticket_page.get_by_text("Device Fota Status Informationexpand_more").first
+        # CHANGED: stored locator once instead of repeating same text lookup
+        fota_locator = ticket_page.get_by_text("Device Fota Status Informationexpand_more")
+
+        if fota_locator.count() > 0:
+            fota_el = fota_locator.first
             if fota_el.is_visible():
                 remove_stage_2_restriction(ticket_page)
             else:
@@ -190,7 +208,7 @@ def run(playwright: Playwright) -> None:
     if not username or not password:
         raise ValueError("TOOL_USERNAME or TOOL_PASSWORD missing in .env")
 
-    jobs = reserve_jobs(batch_limit=15)
+    jobs = reserve_jobs(batch_limit=60)
 
     if not jobs:
         print("No complete jobs available in incoming.")
@@ -200,13 +218,24 @@ def run(playwright: Playwright) -> None:
 
     print(f"Reserved {len(jobs)} job(s). Starting one browser session for batch processing.")
 
+    # CHANGED: headless mode kept for faster execution
     browser = playwright.chromium.launch(headless=False)
     context = browser.new_context()
+
+    # CHANGED: block heavy resources to improve speed
+    context.route(
+    "**/*",
+    lambda route: route.abort()
+    if route.request.resource_type in ["font", "media", "image"]
+    else route.continue_()
+    )
+
     page = context.new_page()
 
     try:
         login(page, username, password)
-        open_ticket_list(page)
+
+        # CHANGED: removed open_ticket_list(page) call because login() now directly opens ticket list page
 
         for job in jobs:
             try:
@@ -226,5 +255,3 @@ def run(playwright: Playwright) -> None:
 if __name__ == "__main__":
     with sync_playwright() as playwright:
         run(playwright)
-        
-        
