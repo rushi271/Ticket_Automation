@@ -1,11 +1,13 @@
 import json
 import os
 import shutil
+import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+from numpy import rint
 import requests
 from dotenv import load_dotenv
 
@@ -31,6 +33,7 @@ UPLOAD_BACKEND_CERT_PATH = "/api/crm/uploadBackendCertificate"
 
 STATUS_STAGE_COMPLETED = "STS_CO_06"
 STATUS_TICKET_CLOSED = "STS_CO_18"
+FOTA_NO_BIN_REMARK = "The device already has latest BIN so no FOTA is required"
 
 STAGE_FLOW = {
     "Stage 1": [
@@ -313,29 +316,56 @@ class AIS140ApiClient:
         return payload
 
     def get_ticket_by_chassis(self, chassis_no: str) -> dict[str, Any]:
-        payload = self._request(
-            "GET",
-            GET_TICKET_LIST_PATH,
-            params={
-                "page": 1,
-                "size": 50,
-                "search": chassis_no.strip(),
-                "kpiCardSelected": self.kpi_card_selected,
-            },
-        )
+        search_value = chassis_no.strip()
+        kpi_order = _dedupe_non_empty([self.kpi_card_selected, "ALL", "ONH", "INP", "QUEUE", "COM"])
+        payload: dict[str, Any] | None = None
+
+        for kpi_value in kpi_order:
+            try:
+                payload = self._request(
+                    "GET",
+                    GET_TICKET_LIST_PATH,
+                    params={
+                        "page": 1,
+                        "size": 50,
+                        "search": search_value,
+                        "kpiCardSelected": kpi_value,
+                    },
+                )
+                break
+            except ApiError as error:
+                if "No Data Found" in str(error):
+                    continue
+                raise
 
         items: list[dict[str, Any]] = []
-        data_wrapper = payload.get("data", {})
-        if isinstance(data_wrapper, dict):
-            maybe_items = data_wrapper.get("data", [])
-            if isinstance(maybe_items, list):
-                items = [x for x in maybe_items if isinstance(x, dict)]
+        if payload is not None:
+            data_wrapper = payload.get("data", {})
+            if isinstance(data_wrapper, dict):
+                maybe_items = data_wrapper.get("data", [])
+                if isinstance(maybe_items, list):
+                    items = [x for x in maybe_items if isinstance(x, dict)]
 
         if not items:
             raise ApiError(f"No ticket found for chassis {chassis_no}")
 
         exact = [x for x in items if str(x.get("vinNo", "")).upper() == chassis_no.upper()]
-        chosen = exact[0] if exact else items[0]
+        candidates = exact if exact else items
+
+        def rank(ticket: dict[str, Any]) -> tuple[int, float]:
+            status = str(ticket.get("remarkbyaccolade", "")).upper()
+            closed_penalty = 1 if status == STATUS_TICKET_CLOSED else 0
+            ts = ticket.get("assignDate") or ticket.get("ticketStartDate") or ""
+            try:
+                if isinstance(ts, str) and ts.endswith("Z"):
+                    ts_value = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                else:
+                    ts_value = 0.0
+            except ValueError:
+                ts_value = 0.0
+            return (closed_penalty, -ts_value)
+
+        chosen = sorted(candidates, key=rank)[0]
 
         required = ["ticketNo", "imei", "vinNo", "iccid"]
         missing = [key for key in required if not chosen.get(key)]
@@ -373,37 +403,96 @@ class AIS140ApiClient:
 
         if include_certificate_dates:
             start_dt = datetime.now(timezone.utc)
-            end_dt = _add_years(start_dt, self.cert_validity_years)
+            end_dt = _add_years(start_dt, self.cert_validity_years) - timedelta(days=1)
             payload["certificateStartDate"] = _as_iso(start_dt)
             payload["certificateExpiryDate"] = _as_iso(end_dt)
 
-        self._request("POST", SAVE_STAGE_PATH, json_body=payload)
+            
 
-    def complete_stages_1_to_3(self, ticket: dict[str, Any]) -> None:
+        response = self._request("POST", SAVE_STAGE_PATH, json_body=payload)
+        # print("DEBUG saveTicketStage response:")
+        # print(response)
+
+    @staticmethod
+    def _is_activity_already_progressed_error(error: Exception) -> bool:
+        return "already progressed beyond it" in str(error).lower()
+
+    @staticmethod
+    def _is_cert_date_order_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return (
+            "certificatestartdate" in text
+            and "certificateexpirydate" in text
+            and "after stage 4" in text
+        )
+
+    def complete_stages_1_to_4(self, ticket: dict[str, Any], vltd_file: Path, backend_file: Path) -> None:
         for stage in ("Stage 1", "Stage 2", "Stage 3"):
             for step in STAGE_FLOW[stage]:
-                self._save_ticket_stage(
-                    ticket=ticket,
-                    stage=stage,
-                    activity=step["activity"],
-                    associated=step["associated"],
-                    status_code=STATUS_STAGE_COMPLETED,
-                    overall_status=STATUS_STAGE_COMPLETED,
-                    remark="done",
-                )
+                try:
+                    self._save_ticket_stage(
+                        ticket=ticket,
+                        stage=stage,
+                        activity=step["activity"],
+                        associated=step["associated"],
+                        status_code=STATUS_STAGE_COMPLETED,
+                        overall_status=STATUS_STAGE_COMPLETED,
+                        remark="done",
+                        include_certificate_dates=False,
+                    )
+                except ApiError as error:
+                    if self._is_activity_already_progressed_error(error):
+                        print(
+                            f"Skipping already-completed activity: {stage} | "
+                            f"{step['activity']} | {step['associated']}"
+                        )
+                        continue
+                    raise
 
-    def close_ticket_with_stage_4(self, ticket: dict[str, Any]) -> None:
+        # Upload certificates before Stage 4 final closure
+        self.upload_certificates(ticket, vltd_file, backend_file)
+
         step = STAGE_FLOW["Stage 4"][0]
-        self._save_ticket_stage(
+
+        try:
+            self._save_ticket_stage(
             ticket=ticket,
             stage="Stage 4",
             activity=step["activity"],
             associated=step["associated"],
             status_code=STATUS_STAGE_COMPLETED,
-            overall_status=STATUS_TICKET_CLOSED,
-            remark="Ticket Completed and Closed",
-            include_certificate_dates=True,
+            overall_status=STATUS_STAGE_COMPLETED,
+            remark="done",
+            include_certificate_dates=False,
         )
+        except ApiError as error:
+            if self._is_activity_already_progressed_error(error):
+                print("Stage 4 already progressed; proceeding to final closure.")
+            else:
+                raise
+
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                self._save_ticket_stage(
+                    ticket=ticket,
+                    stage="Stage 4",
+                    activity=step["activity"],
+                    associated=step["associated"],
+                    status_code=STATUS_STAGE_COMPLETED,
+                    overall_status=STATUS_TICKET_CLOSED,
+                    remark="Ticket Completed and Closed",
+                    include_certificate_dates=True,
+                )
+                print("Stage 4 final closure successful.")
+                break
+            except ApiError as error:
+                if self._is_cert_date_order_error(error) and attempt < attempts:
+                    wait_seconds = 5 * attempt
+                    print(f"Retrying Stage 4 closure in {wait_seconds} seconds...")
+                    time.sleep(wait_seconds)
+                    continue
+                raise
 
     def _upload_certificate(self, path: str, ticket: dict[str, Any], file_path: Path) -> None:
         if not file_path.exists():
@@ -444,15 +533,14 @@ def process_one_ticket(client: AIS140ApiClient, job: dict[str, Any]) -> None:
     ticket = client.get_ticket_by_chassis(chassis_no)
 
     print(f"Ticket matched: {ticket.get('ticketNo')} | VIN: {ticket.get('vinNo')}")
-    client.complete_stages_1_to_3(ticket)
-    client.upload_certificates(ticket, vltd_file, backend_file)
-    client.close_ticket_with_stage_4(ticket)
+    client.complete_stages_1_to_4(ticket, vltd_file, backend_file)
 
 
 def run() -> None:
     cert_validity_years = int(os.getenv("API_CERT_VALIDITY_YEARS", "2"))
     batch_limit = int(os.getenv("BATCH_LIMIT", "150"))
     kpi_card_selected = os.getenv("API_KPI_CARD_SELECTED", "PRO")
+    
 
     jobs = reserve_jobs(batch_limit=batch_limit)
     if not jobs:
