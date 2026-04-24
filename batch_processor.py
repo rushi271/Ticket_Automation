@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-from numpy import rint
+# from numpy import rint
 import requests
 from dotenv import load_dotenv
 
@@ -533,12 +533,13 @@ def process_one_ticket(client: AIS140ApiClient, job: dict[str, Any]) -> None:
     ticket = client.get_ticket_by_chassis(chassis_no)
 
     print(f"Ticket matched: {ticket.get('ticketNo')} | VIN: {ticket.get('vinNo')}")
+    
     client.complete_stages_1_to_4(ticket, vltd_file, backend_file)
 
 
 def run() -> None:
     cert_validity_years = int(os.getenv("API_CERT_VALIDITY_YEARS", "2"))
-    batch_limit = int(os.getenv("BATCH_LIMIT", "150"))
+    batch_limit = int(os.getenv("BATCH_LIMIT", "200"))
     kpi_card_selected = os.getenv("API_KPI_CARD_SELECTED", "PRO")
     
 

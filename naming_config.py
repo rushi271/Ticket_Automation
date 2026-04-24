@@ -4,23 +4,23 @@ from pathlib import Path
 PATTERNS = [
     {
         "format": "state_prefixed",
-        "pattern": r"^([a-z]{2})\s*[-_]\s*(MAT[A-Z0-9]{14})(?:\s*[-_]\s*([A-Za-z0-9]+))?\s*\.pdf$",
+        "pattern": r"^([a-z]{2})\s*[-_]\s*(MAT[A-Z0-9]{14})(?:\s*[-_]\s*([A-Za-z0-9][A-Za-z0-9 ]*))?\s*\.pdf$",
         "groups": {"state": 1, "chassis": 2},
     },
     {
         "format": "simple",
-        "pattern": r"^(MAT[A-Z0-9]{14})(?:\s*[-_]\s*([A-Za-z0-9]+))?\s*\.pdf$",
+        "pattern": r"^(MAT[A-Z0-9]{14})(?:\s*[-_]\s*([A-Za-z0-9][A-Za-z0-9 ]*))?\s*\.pdf$",
         "groups": {"chassis": 1},
     },
     {
         "format": "simple_space_suffix",
-        "pattern": r"^(MAT[A-Z0-9]{14})\s+([A-Za-z0-9]+)\s*\.pdf$",
+        "pattern": r"^(MAT[A-Z0-9]{14})\s+([A-Za-z0-9][A-Za-z0-9 ]*)\s*\.pdf$",
         "groups": {"chassis": 1},
     },
 ]
 
 def extract_backend_suffix(filename: str) -> str:
-    suffix_match = re.search(r'(?:[-_]\s*|\s+)([A-Za-z0-9]+)\s*\.pdf$', filename.strip())
+    suffix_match = re.search(r'(?:[-_]\s*|\s+)([A-Za-z0-9][A-Za-z0-9 ]*)\s*\.pdf$', filename.strip())
     if suffix_match:
         return suffix_match.group(1)
     return ""
