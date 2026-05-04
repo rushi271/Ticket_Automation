@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from naming_config import extract_components
 
-BASE_DIR = Path(r"C:\Users\Rushi Mantri\Downloads\AIS Certificates\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Documents\Backend and VLTD Certificates")
+BASE_DIR = Path(r"D:\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Backend and VLTD Certificates")
 
 INCOMING_DIR = BASE_DIR / "incoming"
 PROCESSING_DIR = BASE_DIR / "processing"
