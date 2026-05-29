@@ -106,7 +106,7 @@ def reserve_jobs(batch_limit: int | None = None):
 def main():
     ensure_folders()
 
-    reserved_jobs = reserve_jobs(batch_limit=10)
+    reserved_jobs = reserve_jobs(batch_limit=100)
 
     if not reserved_jobs:
         print("No complete jobs available in incoming.")
