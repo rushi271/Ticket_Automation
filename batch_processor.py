@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+import csv
+import re
 
+CHASSIS_PATTERN = re.compile(
+    r"^MAT[A-Z0-9]{14}$",
+    re.IGNORECASE
+)
 # from numpy import rint
 import requests
 from dotenv import load_dotenv
@@ -33,6 +39,7 @@ UPLOAD_BACKEND_CERT_PATH = "/api/crm/uploadBackendCertificate"
 
 STATUS_STAGE_COMPLETED = "STS_CO_06"
 STATUS_TICKET_CLOSED = "STS_CO_18"
+STATUS_RTO_APPROVAL_HOLD = "STS_CO_17"
 FOTA_NO_BIN_REMARK = "The device already has latest BIN so no FOTA is required"
 
 STAGE_FLOW = {
@@ -120,6 +127,32 @@ def _dedupe_non_empty(values: list[str]) -> list[str]:
         out.append(normalized)
 
     return out
+
+
+def log_to_csv(chassis_no: str, status: str, error: str = "") -> None:
+    """Append a daily audit record for chassis processing.
+
+    Daily files are used so each day's work is isolated and easy to review.
+    Append mode is used so we do not overwrite previously recorded rows.
+    Header creation is only performed once per file to keep the CSV valid.
+    Logging failures are caught by callers so audit errors do not stop ticket processing.
+    """
+    logs_dir = Path(__file__).resolve().parent / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    today_file = logs_dir / f"{datetime.now().date().isoformat()}.csv"
+    file_exists = today_file.exists()
+
+    with today_file.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        if not file_exists:
+            writer.writerow(["timestamp", "chassis_no", "status", "error"])
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            chassis_no,
+            status,
+            error,
+        ])
 
 
 def _safe_json(response: requests.Response) -> Any:
@@ -317,6 +350,10 @@ class AIS140ApiClient:
 
     def get_ticket_by_chassis(self, chassis_no: str) -> dict[str, Any]:
         search_value = chassis_no.strip()
+        if not CHASSIS_PATTERN.fullmatch(search_value):
+            raise ApiError(
+                f"Invalid chassis format: {search_value}"
+            )
         kpi_order = _dedupe_non_empty([self.kpi_card_selected, "ALL", "ONH", "INP", "QUEUE", "COM"])
         payload: dict[str, Any] | None = None
 
@@ -349,8 +386,11 @@ class AIS140ApiClient:
         if not items:
             raise ApiError(f"No ticket found for chassis {chassis_no}")
 
-        exact = [x for x in items if str(x.get("vinNo", "")).upper() == chassis_no.upper()]
-        candidates = exact if exact else items
+        exact = [
+            x for x in items
+            if str(x.get("vinNo", "")).strip().upper()
+            == chassis_no.strip().upper()
+        ]
 
         def rank(ticket: dict[str, Any]) -> tuple[int, float]:
             status = str(ticket.get("remarkbyaccolade", "")).upper()
@@ -365,7 +405,20 @@ class AIS140ApiClient:
                 ts_value = 0.0
             return (closed_penalty, -ts_value)
 
-        chosen = sorted(candidates, key=rank)[0]
+        # Do NOT fallback to partial matches
+        if not exact:
+            available_vins = [
+                str(x.get("vinNo", ""))
+                for x in items
+            ]
+
+            raise ApiError(
+                f"Exact VIN match not found for chassis "
+                f"{chassis_no}. "
+                f"Returned VINs: {available_vins}"
+            )
+
+        chosen = sorted(exact, key=rank)[0]
 
         required = ["ticketNo", "imei", "vinNo", "iccid"]
         missing = [key for key in required if not chosen.get(key)]
@@ -512,6 +565,67 @@ class AIS140ApiClient:
         self._upload_certificate(UPLOAD_VAHAN_CERT_PATH, ticket, vltd_file)
         self._upload_certificate(UPLOAD_BACKEND_CERT_PATH, ticket, backend_file)
 
+    def update_ticket_status(
+        self,
+        ticket: dict[str, Any],
+        *,
+        status_code: str,
+        remark: str = "Manual ticket status update",
+        include_certificate_dates: bool = False,
+    ) -> None:
+        """Advance the standard stages and then set the ticket's overall status to the requested code."""
+        for stage in ("Stage 1", "Stage 2", "Stage 3"):
+            for step in STAGE_FLOW[stage]:
+                try:
+                    self._save_ticket_stage(
+                        ticket=ticket,
+                        stage=stage,
+                        activity=step["activity"],
+                        associated=step["associated"],
+                        status_code=STATUS_STAGE_COMPLETED,
+                        overall_status=STATUS_STAGE_COMPLETED,
+                        remark="done",
+                        include_certificate_dates=False,
+                    )
+                except ApiError as error:
+                    if self._is_activity_already_progressed_error(error):
+                        print(
+                            f"Skipping already-completed activity: {stage} | "
+                            f"{step['activity']} | {step['associated']}"
+                        )
+                        continue
+                    raise
+
+        step = STAGE_FLOW["Stage 4"][0]
+        try:
+            self._save_ticket_stage(
+                ticket=ticket,
+                stage="Stage 4",
+                activity=step["activity"],
+                associated=step["associated"],
+                status_code=STATUS_STAGE_COMPLETED,
+                overall_status=status_code,
+                remark=remark,
+                include_certificate_dates=include_certificate_dates,
+            )
+        except ApiError as error:
+            if self._is_activity_already_progressed_error(error):
+                print("Stage 4 already progressed; status update may have already been applied.")
+            else:
+                raise
+
+    def update_status_to_rto_hold(self, ticket: dict[str, Any], remark: str = "Direct RTO hold status update") -> None:
+        """Update the ticket directly to RTO approval hold status."""
+        self.update_ticket_status(
+            ticket=ticket,
+            status_code=STATUS_RTO_APPROVAL_HOLD,
+            remark=remark,
+            include_certificate_dates=False,
+        )
+        rto_timestamp = datetime.now(timezone.utc).strftime("%d-%m-%Y")
+        print("✓ Ticket set to RTO approval hold status")
+        print(f"  RTO approval timestamp: {rto_timestamp}")
+
 
 def write_error_log(job: dict[str, Any], error: Exception) -> None:
     ERROR_SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -570,10 +684,18 @@ def run() -> None:
         try:
             process_one_ticket(client, job)
             move_processing_job(job, PROCESSED_DIR)
+            try:
+                log_to_csv(job["chassis_no"], "SUCCESS")
+            except Exception as e:
+                print(f"Logging failed: {e}")
             print(f"SUCCESS: {job['chassis_no']}")
         except Exception as error:
             print(f"FAILED: {job['chassis_no']} -> {error}")
             write_error_log(job, error)
+            try:
+                log_to_csv(job["chassis_no"], "FAILED", str(error))
+            except Exception as e:
+                print(f"Logging failed: {e}")
             move_processing_job(job, FAILED_DIR)
 
 

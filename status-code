@@ -1,0 +1,155 @@
+const STAGE_FLOW = {
+  1: [
+    {
+      activity: 'FOTA / OTA Activities',
+      associated: 'Dealer Request / Vehicle Ignition On',
+    },
+    {
+      activity: 'FOTA / OTA Activities',
+      associated: 'GSM Network Availability',
+    },
+    { activity: 'FOTA / OTA Activities', associated: 'GPS Fix availability' },
+  ],
+  2: [
+    {
+      activity: 'Vahan Certification',
+      associated: 'Vahan Portal Availability',
+    },
+    {
+      activity: 'Vahan Certification',
+      associated: 'Vehicle Data availability on Vahan',
+    },
+  ],
+  3: [
+    {
+      activity: 'AIS-140 Certification',
+      associated: 'Backend Portal Availability',
+    },
+    {
+      activity: 'AIS-140 Certification',
+      associated: 'Panic Event Confirmation',
+    },
+    {
+      activity: 'AIS-140 Certification',
+      associated: 'OTP / Live Location Fetching',
+    },
+  ],
+  4: [{ activity: 'Certificate Generation / Submission', associated: 'AEPL' }],
+};
+const stage1ticketStatus = [
+  'STS_CO_03',
+  'STS_CO_05',
+  'STS_CO_06',
+  'STS_CO_07',
+  'STS_CO_08',
+  'STS_CO_09',
+  'STS_CO_10',
+  'STS_CO_25',
+  'STS_CO_28',
+  'STS_CO_29',
+  'STS_CO_30',
+  'STS_CO_26',
+];
+const stage2ticketStatus = [
+  'STS_CO_03',
+  'STS_CO_05',
+  'STS_CO_06',
+  'STS_CO_11',
+  'STS_CO_12',
+  'STS_CO_28',
+  'STS_CO_30',
+  'STS_CO_26',
+];
+const stage3ticketStatus = [
+  'STS_CO_03',
+  'STS_CO_05',
+  'STS_CO_06',
+  'STS_CO_13',
+  'STS_CO_14',
+  'STS_CO_15',
+  'STS_CO_16',
+  'STS_CO_28',
+  'STS_CO_30',
+  'STS_CO_26',
+];
+const stage4ticketStatus = [
+  'STS_CO_03',
+  'STS_CO_05',
+  'STS_CO_06',
+  'STS_CO_17',
+  'STS_CO_28',
+  'STS_CO_30',
+  'STS_CO_26',
+];
+
+const statusCodes = {
+  STS_CO_01: 'Not Assigned',
+  STS_CO_02: 'Assigned',
+  STS_CO_03: 'Started',
+  STS_CO_04: 'In Queue',
+  STS_CO_05: 'In Progress',
+  STS_CO_06: 'Completed',
+  STS_CO_07: 'On Hold Due to Vehicle Not Available',
+  STS_CO_08: 'On Hold Due to Ignition Not ON',
+  STS_CO_09: 'On Hold Due to GSM Network Not Available',
+  STS_CO_10: 'On Hold Due to Invalid GPS',
+  STS_CO_11: 'On Hold Due to Vahan Portal Down',
+  STS_CO_12: 'On Hold Due to Data not Available on VAHAN',
+  STS_CO_13: 'On Hold Due to Backend Portal Down',
+  STS_CO_14: 'On Hold Due to Panic Event Not Confirmed',
+  STS_CO_15: 'On Hold Due to OTP not being received',
+  STS_CO_16: 'On Hold Due to Live Location Pending from Backend',
+  STS_CO_17: 'On Hold Due to Waiting for RTO Approval',
+  STS_CO_18: 'Ticket Completed and Closed',
+  STS_CO_19: 'Ticket Generated but Data Not Received from CRM',
+  STS_CO_20: 'Ticket Cancelled Due to Change Request Device Change',
+  STS_CO_21: 'Ticket Cancelled Due to Change Request Vehicle Owner Change',
+  STS_CO_22: 'Ticket Cancelled Due to Change Request RTO or State Change',
+  STS_CO_23: 'Ticket Cancelled as per Request',
+  STS_CO_24: 'Ticket Cancelled Due to Invoice Cancelled',
+  STS_CO_25: 'Change required from CRM',
+  STS_CO_26: 'Other',
+  STS_CO_27: 'FE has not Initiated the Process',
+  STS_CO_28: 'On Hold Due to Non-Working Hours',
+  STS_CO_29: 'On Hold Due to SIM Validity Issue',
+  STS_CO_30: 'Ticket Suspended Due to Customer Not Responding',
+};
+
+const completedStatusArray = ['STS_CO_18'];
+
+const cancelledStatusArray = [
+  'STS_CO_20',
+  'STS_CO_21',
+  'STS_CO_22',
+  'STS_CO_23',
+  'STS_CO_24',
+];
+
+const onHoldStatusArray = [
+  'STS_CO_07',
+  'STS_CO_08',
+  'STS_CO_09',
+  'STS_CO_10',
+  'STS_CO_11',
+  'STS_CO_12',
+  'STS_CO_13',
+  'STS_CO_14',
+  'STS_CO_15',
+  'STS_CO_16',
+  'STS_CO_17',
+  'STS_CO_19',
+  'STS_CO_25',
+  'STS_CO_26',
+  'STS_CO_28',
+  'STS_CO_29',
+  'STS_CO_30',
+];
+
+const inProgressStatusArray = [
+  'STS_CO_01',
+  'STS_CO_02',
+  'STS_CO_03',
+  'STS_CO_04',
+  'STS_CO_05',
+  'STS_CO_06',
+];

@@ -19,6 +19,10 @@ PATTERNS = [
     },
 ]
 
+
+STATE_CODES = {"hp", "ka", "tn", "kl", "wb", "ml"}
+
+
 def extract_backend_suffix(filename: str) -> str:
     suffix_match = re.search(
         r'(?:[-_]\s*|\s+)([A-Za-z0-9][A-Za-z0-9 ]*)\s*\.pdf$',
@@ -64,10 +68,15 @@ def extract_components(file_path: Path) -> dict:
                 re.IGNORECASE
             )
 
+            normalized_suffix = suffix.lower()
             if only_chassis:
                 result["cert_type"] = "vltd"
-            elif "vltd" in suffix.lower():
+            elif "vltd" in normalized_suffix:
                 result["cert_type"] = "vltd"
+            elif normalized_suffix in STATE_CODES:
+                if not result.get("state"):
+                    result["state"] = normalized_suffix
+                result["cert_type"] = "state_code"
             elif suffix:
                 result["cert_type"] = "backend"
             else:
