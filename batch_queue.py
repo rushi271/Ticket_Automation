@@ -3,11 +3,12 @@ import shutil
 from pathlib import Path
 from naming_config import extract_components
 
-BASE_DIR = Path(r"C:\Users\Rushi Mantri\Downloads\AIS Certificates\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Documents\Backend and VLTD Certificates")
+BASE_DIR = Path(r"C:\Users\RUSHIKESH MANTRI\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Documents\Backend and VLTD Certificates")
 
 INCOMING_DIR = BASE_DIR / "incoming"
 PROCESSING_DIR = BASE_DIR / "processing"
 PROCESSED_DIR = BASE_DIR / "processed"
+RTO_PROCESSED_DIR = BASE_DIR / "rto_tickets"
 FAILED_DIR = BASE_DIR / "failed"
 ERROR_SCREENSHOTS_DIR = BASE_DIR / "error_screenshots"
 
@@ -47,20 +48,26 @@ def scan_jobs(folder: Path):
 
     jobs = []
     for key, files in grouped.items():
+        # Treat state-only suffix files as backend when a VLTD companion exists.
+        if "state_code" in files and "vltd" in files:
+            files["backend"] = files.pop("state_code")
+
         # Check if vltd exists
         if "vltd" in files:
             # Get all backend types (everything except vltd and the metadata keys)
             backend_types = {k: v for k, v in files.items() if k not in ["state", "chassis", "vltd"]}
 
-            # For each backend type, create a job
-            for backend_type, backend_file in backend_types.items():
-                jobs.append({
-                    "state": files["state"],
-                    "chassis_no": files["chassis"],
-                    "backend_type": backend_type,
-                    "vltd_file": files["vltd"],
-                    "backend_file": backend_file,
-                })
+            if backend_types:
+                # For each backend type, create a job
+                for backend_type, backend_file in backend_types.items():
+                    jobs.append({
+                        "state": files["state"],
+                        "chassis_no": files["chassis"],
+                        "backend_type": backend_type,
+                        "vltd_file": files["vltd"],
+                        "backend_file": backend_file,
+                    })
+
 
     return jobs
 
@@ -68,6 +75,7 @@ def scan_jobs(folder: Path):
 def ensure_folders():
     PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    RTO_PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     FAILED_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -75,10 +83,12 @@ def move_job_files(job: dict, target_dir: Path) -> dict:
     target_dir.mkdir(parents=True, exist_ok=True)
 
     new_vltd = target_dir / job["vltd_file"].name
-    new_backend = target_dir / job["backend_file"].name
-
     shutil.move(str(job["vltd_file"]), str(new_vltd))
-    shutil.move(str(job["backend_file"]), str(new_backend))
+
+    new_backend = None
+    if job.get("backend_file") is not None:
+        new_backend = target_dir / job["backend_file"].name
+        shutil.move(str(job["backend_file"]), str(new_backend))
 
     return {
         "state": job["state"],
@@ -106,7 +116,7 @@ def reserve_jobs(batch_limit: int | None = None):
 def main():
     ensure_folders()
 
-    reserved_jobs = reserve_jobs(batch_limit=10)
+    reserved_jobs = reserve_jobs(batch_limit=100)
 
     if not reserved_jobs:
         print("No complete jobs available in incoming.")
