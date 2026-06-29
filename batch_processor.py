@@ -38,8 +38,18 @@ UPLOAD_VAHAN_CERT_PATH = "/api/crm/uploadVahanCertificate"
 UPLOAD_BACKEND_CERT_PATH = "/api/crm/uploadBackendCertificate"
 
 STATUS_STAGE_COMPLETED = "STS_CO_06"
+STATUS_TICKET_COMPLETED = "STS_CO_06"
 STATUS_TICKET_CLOSED = "STS_CO_18"
+STATUS_TICKET_COMPLETED_AND_CLOSED = "STS_CO_23"
+STATUS_TICKET_CANCELLED = "STS_CO_20"
 STATUS_RTO_APPROVAL_HOLD = "STS_CO_17"
+TERMINAL_STATUS_CODES = {
+    STATUS_TICKET_COMPLETED,
+    STATUS_TICKET_CLOSED,
+    STATUS_TICKET_COMPLETED_AND_CLOSED,
+    STATUS_TICKET_CANCELLED,
+    STATUS_RTO_APPROVAL_HOLD,
+}
 FOTA_NO_BIN_REMARK = "The device already has latest BIN so no FOTA is required"
 
 STAGE_FLOW = {
@@ -471,6 +481,16 @@ class AIS140ApiClient:
         return "already progressed beyond it" in str(error).lower()
 
     @staticmethod
+    def _is_prerequisite_incomplete_error(error: Exception) -> bool:
+        """Check if error indicates a prerequisite or stage gate hasn't been completed."""
+        error_text = str(error).lower()
+        return (
+            "must be completed first" in error_text
+            or "complete all activities of stage" in error_text
+            or "complete all activities of stage 1" in error_text
+        )
+
+    @staticmethod
     def _is_cert_date_order_error(error: Exception) -> bool:
         text = str(error).lower()
         return (
@@ -501,7 +521,7 @@ class AIS140ApiClient:
                         )
                         continue
                     raise
-
+        
         # Upload certificates before Stage 4 final closure
         self.upload_certificates(ticket, vltd_file, backend_file)
 
@@ -573,7 +593,21 @@ class AIS140ApiClient:
         remark: str = "Manual ticket status update",
         include_certificate_dates: bool = False,
     ) -> None:
-        """Advance the standard stages and then set the ticket's overall status to the requested code."""
+        """Update the ticket status while keeping the stage progression behavior for terminal statuses."""
+        if status_code.upper() not in TERMINAL_STATUS_CODES:
+            for step in STAGE_FLOW["Stage 1"]:
+                self._save_ticket_stage(
+                    ticket=ticket,
+                    stage="Stage 1",
+                    activity=step["activity"],
+                    associated=step["associated"],
+                    status_code=STATUS_STAGE_COMPLETED,
+                    overall_status=status_code,
+                    remark=remark,
+                    include_certificate_dates=False,
+                )
+            return
+
         for stage in ("Stage 1", "Stage 2", "Stage 3"):
             for step in STAGE_FLOW[stage]:
                 try:
@@ -594,23 +628,34 @@ class AIS140ApiClient:
                             f"{step['activity']} | {step['associated']}"
                         )
                         continue
+                    if self._is_prerequisite_incomplete_error(error):
+                        print(
+                            f"Skipping prerequisite-incomplete activity: {stage} | "
+                            f"{step['activity']} | {step['associated']}"
+                        )
+                        continue
                     raise
 
         step = STAGE_FLOW["Stage 4"][0]
+        final_status_code = status_code.upper()
+        if final_status_code == STATUS_TICKET_COMPLETED_AND_CLOSED:
+            final_status_code = STATUS_TICKET_CLOSED
         try:
             self._save_ticket_stage(
                 ticket=ticket,
                 stage="Stage 4",
                 activity=step["activity"],
                 associated=step["associated"],
-                status_code=STATUS_STAGE_COMPLETED,
-                overall_status=status_code,
+                status_code=final_status_code,
+                overall_status=final_status_code,
                 remark=remark,
                 include_certificate_dates=include_certificate_dates,
             )
         except ApiError as error:
             if self._is_activity_already_progressed_error(error):
                 print("Stage 4 already progressed; status update may have already been applied.")
+            elif self._is_prerequisite_incomplete_error(error):
+                print("Stage 4 prerequisite incomplete; status update may still be applied later.")
             else:
                 raise
 
