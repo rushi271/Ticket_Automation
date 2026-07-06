@@ -478,7 +478,11 @@ class AIS140ApiClient:
 
     @staticmethod
     def _is_activity_already_progressed_error(error: Exception) -> bool:
-        return "already progressed beyond it" in str(error).lower()
+        error_text = str(error).lower()
+        return (
+            "already progressed beyond it" in error_text
+            or "completed activity cannot be reverted" in error_text
+        )
 
     @staticmethod
     def _is_prerequisite_incomplete_error(error: Exception) -> bool:
@@ -489,6 +493,51 @@ class AIS140ApiClient:
             or "complete all activities of stage" in error_text
             or "complete all activities of stage 1" in error_text
         )
+
+    @staticmethod
+    def _is_stage1_status_disallowed_error(error: Exception) -> bool:
+        error_text = str(error).lower()
+        return "not allowed in stage 1" in error_text
+
+    def _complete_stage_flow(self, ticket: dict[str, Any], stages: tuple[str, ...]) -> None:
+        for stage in stages:
+            for step in STAGE_FLOW[stage]:
+                try:
+                    self._save_ticket_stage(
+                        ticket=ticket,
+                        stage=stage,
+                        activity=step["activity"],
+                        associated=step["associated"],
+                        status_code=STATUS_STAGE_COMPLETED,
+                        overall_status=STATUS_STAGE_COMPLETED,
+                        remark="done",
+                        include_certificate_dates=False,
+                    )
+                except ApiError as error:
+                    if self._is_activity_already_progressed_error(error):
+                        print(
+                            f"Skipping already-completed activity: {stage} | "
+                            f"{step['activity']} | {step['associated']}"
+                        )
+                        continue
+                    if self._is_prerequisite_incomplete_error(error):
+                        print(
+                            f"Skipping prerequisite-incomplete activity: {stage} | "
+                            f"{step['activity']} | {step['associated']}"
+                        )
+                        continue
+                    raise
+
+    @staticmethod
+    def _resolve_prerequisite_stages_from_error(error: Exception) -> tuple[str, ...]:
+        error_text = str(error).lower()
+        if "stage 3" in error_text or "backend portal availability" in error_text:
+            return ("Stage 1", "Stage 2", "Stage 3")
+        if "stage 2" in error_text:
+            return ("Stage 1", "Stage 2")
+        if "stage 1" in error_text:
+            return ("Stage 1",)
+        return ()
 
     @staticmethod
     def _is_cert_date_order_error(error: Exception) -> bool:
@@ -595,18 +644,122 @@ class AIS140ApiClient:
     ) -> None:
         """Update the ticket status while keeping the stage progression behavior for terminal statuses."""
         if status_code.upper() not in TERMINAL_STATUS_CODES:
-            for step in STAGE_FLOW["Stage 1"]:
+            step = STAGE_FLOW["Stage 1"][0]
+            try:
                 self._save_ticket_stage(
                     ticket=ticket,
                     stage="Stage 1",
                     activity=step["activity"],
                     associated=step["associated"],
                     status_code=STATUS_STAGE_COMPLETED,
-                    overall_status=status_code,
+                    overall_status=status_code.upper(),
                     remark=remark,
                     include_certificate_dates=False,
                 )
-            return
+                return
+            except ApiError as error:
+                if self._is_activity_already_progressed_error(error):
+                    print("Stage 1 already progressed; attempting Stage 4 overall status update.")
+                    step = STAGE_FLOW["Stage 4"][0]
+                    try:
+                        self._save_ticket_stage(
+                            ticket=ticket,
+                            stage="Stage 4",
+                            activity=step["activity"],
+                            associated=step["associated"],
+                            status_code=STATUS_STAGE_COMPLETED,
+                            overall_status=status_code.upper(),
+                            remark=remark,
+                            include_certificate_dates=False,
+                        )
+                        return
+                    except ApiError as stage4_error:
+                        if self._is_activity_already_progressed_error(stage4_error):
+                            print("Stage 4 already progressed; status update may have already been applied.")
+                            return
+                        if self._is_prerequisite_incomplete_error(stage4_error):
+                            missing_stages = self._resolve_prerequisite_stages_from_error(stage4_error)
+                            if missing_stages:
+                                print(
+                                    f"Stage 4 prerequisite incomplete; completing {', '.join(missing_stages)} before retrying."
+                                )
+                                self._complete_stage_flow(ticket, missing_stages)
+                                try:
+                                    self._save_ticket_stage(
+                                        ticket=ticket,
+                                        stage="Stage 4",
+                                        activity=step["activity"],
+                                        associated=step["associated"],
+                                        status_code=status_code.upper(),
+                                        overall_status=status_code.upper(),
+                                        remark=remark,
+                                        include_certificate_dates=False,
+                                    )
+                                    return
+                                except ApiError as retry_error:
+                                    if self._is_activity_already_progressed_error(retry_error):
+                                        print("Stage 4 already progressed; status update may have already been applied.")
+                                        return
+                                    if self._is_prerequisite_incomplete_error(retry_error):
+                                        print("Stage 4 prerequisite incomplete; direct overall status update cannot be applied without touching earlier stages.")
+                                        return
+                                    raise
+                            print("Stage 4 prerequisite incomplete; direct overall status update cannot be applied without touching earlier stages.")
+                            return
+                        raise
+                if self._is_stage1_status_disallowed_error(error):
+                    print("Stage 1 does not allow this target status; attempting Stage 4 overall status update.")
+                    step = STAGE_FLOW["Stage 4"][0]
+                    try:
+                        self._save_ticket_stage(
+                            ticket=ticket,
+                            stage="Stage 4",
+                            activity=step["activity"],
+                            associated=step["associated"],
+                            status_code=STATUS_STAGE_COMPLETED,
+                            overall_status=status_code.upper(),
+                            remark=remark,
+                            include_certificate_dates=False,
+                        )
+                        return
+                    except ApiError as stage4_error:
+                        if self._is_activity_already_progressed_error(stage4_error):
+                            print("Stage 4 already progressed; status update may have already been applied.")
+                            return
+                        if self._is_prerequisite_incomplete_error(stage4_error):
+                            missing_stages = self._resolve_prerequisite_stages_from_error(stage4_error)
+                            if missing_stages:
+                                print(
+                                    f"Stage 4 prerequisite incomplete; completing {', '.join(missing_stages)} before retrying."
+                                )
+                                self._complete_stage_flow(ticket, missing_stages)
+                                try:
+                                    self._save_ticket_stage(
+                                        ticket=ticket,
+                                        stage="Stage 4",
+                                        activity=step["activity"],
+                                        associated=step["associated"],
+                                        status_code=status_code.upper(),
+                                        overall_status=status_code.upper(),
+                                        remark=remark,
+                                        include_certificate_dates=False,
+                                    )
+                                    return
+                                except ApiError as retry_error:
+                                    if self._is_activity_already_progressed_error(retry_error):
+                                        print("Stage 4 already progressed; status update may have already been applied.")
+                                        return
+                                    if self._is_prerequisite_incomplete_error(retry_error):
+                                        print("Stage 4 prerequisite incomplete; direct overall status update cannot be applied without touching earlier stages.")
+                                        return
+                                    raise
+                            print("Stage 4 prerequisite incomplete; direct overall status update cannot be applied without touching earlier stages.")
+                            return
+                        raise
+                if self._is_prerequisite_incomplete_error(error):
+                    print("Stage 1 prerequisite incomplete; status update may still be applied later.")
+                    return
+                raise
 
         for stage in ("Stage 1", "Stage 2", "Stage 3"):
             for step in STAGE_FLOW[stage]:
