@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from naming_config import extract_components
 
-BASE_DIR = Path(r"C:\Users\RUSHIKESH MANTRI\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Documents\Backend and VLTD Certificates")
+BASE_DIR = Path(r"C:\Users\RUSHIKESH MANTRI\ACCOLADE ELECTRONICS PRIVATE LIMITED\aisautomation - Certificates\Backend and VLTD Certificates")
 
 INCOMING_DIR = BASE_DIR / "incoming"
 PROCESSING_DIR = BASE_DIR / "processing"
@@ -11,7 +11,7 @@ PROCESSED_DIR = BASE_DIR / "processed"
 RTO_PROCESSED_DIR = BASE_DIR / "rto_tickets"
 FAILED_DIR = BASE_DIR / "failed"
 ERROR_SCREENSHOTS_DIR = BASE_DIR / "error_screenshots"
-
+    
 CHASSIS_RE = re.compile(r"MAT[A-Z0-9]{14}", re.IGNORECASE)
 
 

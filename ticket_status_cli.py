@@ -17,6 +17,8 @@ STATUS_ALIASES = {
     "close": "STS_CO_18",
     "closed": "STS_CO_18",
     "completed": "STS_CO_06",
+    "completed-and-closed": "STS_CO_23",
+    "complete-and-closed": "STS_CO_23",
     "started": "STS_CO_03",
     "in-progress": "STS_CO_05",
     "on-hold": "STS_CO_17",
@@ -157,6 +159,7 @@ def main() -> None:
     client = AIS140ApiClient(base_urls=base_urls, login_candidates=login_candidates)
     client.login()
 
+    outcomes: dict[str, str] = {}
     for chassis_no in chassis_numbers:
         try:
             update_status_for_chassis(
@@ -166,13 +169,22 @@ def main() -> None:
                 remark=args.remark,
                 dry_run=False,
             )
+            outcomes[chassis_no] = "SUCCESS"
             print(f"SUCCESS: {chassis_no}")
         except Exception as error:
+            outcomes[chassis_no] = "FAILED"
             print(f"FAILED: {chassis_no} -> {error}")
             try:
                 log_to_csv(chassis_no, "FAILED", str(error))
             except Exception as log_error:  # pragma: no cover - best effort logging
                 print(f"Logging failed: {log_error}")
+
+    summary = ", ".join(f"{state}:{count}" for state, count in {
+        "SUCCESS": sum(1 for value in outcomes.values() if value == "SUCCESS"),
+        "FAILED": sum(1 for value in outcomes.values() if value == "FAILED"),
+    }.items() if count)
+    if summary:
+        print(f"SUMMARY: {summary}")
 
 
 if __name__ == "__main__":
